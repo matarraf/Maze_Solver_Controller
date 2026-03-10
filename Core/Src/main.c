@@ -65,7 +65,7 @@ static void MX_TIM4_Init(void);                          // Initializes Timer 4
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Servo on TIM2 CH1 (PA0)                               // Servo output is connected to Timer 2, Channel 1, pin PA0
 #define SERVO_TIM   (&htim2)                             // Convenience macro: servo uses timer 2
 #define SERVO_CH    TIM_CHANNEL_1                        // Convenience macro: servo uses channel 1
@@ -90,7 +90,37 @@ void servo_set_angle(float angle)
   float pulse_us_f = 1000.0f + (angle / 180.0f) * 1000.0f; // Map 0..180° to 1000..2000 us
   servo_set_pulse_us((uint16_t)(pulse_us_f + 0.5f));    // Round to nearest integer and send to servo
 }
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Motor driver on TIM3 CH1 (single PWM output)
+// This single PWM line controls the speed of both motors together through one driver.
+#define MOTOR_TIM   (&htim3)
+#define MOTOR_CH    TIM_CHANNEL_1
+
+// Set motor PWM duty cycle as a percentage: 0..100
+static void motor_set_speed_percent(uint8_t percent)
+{
+  if (percent > 100) percent = 100;                     // Clamp to valid range
+
+  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);   // Read timer auto-reload value
+  uint32_t pulse = (arr * percent) / 100U;              // Convert percentage to compare value
+
+  __HAL_TIM_SET_COMPARE(MOTOR_TIM, MOTOR_CH, pulse);    // Update PWM duty cycle
+}
+
+// Set motor direction using one DIR pin
+static void motor_set_direction(bool forward)
+{
+  HAL_GPIO_WritePin(MOTOR_L_DIR_GPIO_Port, MOTOR_L_DIR_Pin,
+                    forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // If your IR sensors output LOW when they see BLACK, set this to 1.
 // If they output HIGH on black, set to 0.
 #define IR_BLACK_IS_LOW   1                             // Logic configuration for interpreting IR sensor outputs
@@ -152,7 +182,9 @@ static uint8_t ir_read_mask(void)
 
   return m;                                             // Return combined bitmask
 }
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // HC-SR04: trigger pulse (10us HIGH)
 // Sends the ultrasonic sensor a short pulse to start a measurement.
 static void us_trigger(void)
@@ -206,6 +238,7 @@ static uint32_t us_read_distance_mm(void)
   // Use integer math: (pw * 343) / 2000 gives mm (since 0.343/2 = 0.1715)
   return (pw * 343U) / 2000U;                           // Convert pulse width into one-way distance in mm
 }
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Global sensor values (accessible from anywhere in main.c)
 volatile uint8_t  g_ir_mask = 0;                        // Latest 8-bit IR sensor reading
@@ -247,13 +280,16 @@ int main(void)
   MX_TIM4_Init();                                       // Initialize Timer 4
 
   /* USER CODE BEGIN 2 */
-  dwt_init();                                           // Enable microsecond timing using DWT cycle counter
+  dwt_init();                                             // Enable microsecond timing using DWT cycle counter
 
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);             // Start PWM output on TIM2 Channel 1 for servo
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);               // Start PWM output on TIM2 Channel 1 for servo
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);               // Start PWM output on TIM3 Channel 1 for motor driver
 
   // Optional: start centered
-  servo_set_angle(90.0f);                               // Move servo to center position at startup
+  servo_set_angle(90.0f);                                 // Move servo to center position at startup
 
+  motor_set_direction(true);                              // Set default motor direction
+  motor_set_speed_percent(0);                             // Keep motors stopped at startup
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -265,6 +301,19 @@ int main(void)
     /* USER CODE BEGIN 3 */
     g_ir_mask = ir_read_mask();                         // Read all 8 IR sensors and store as bitmask
     g_us_mm   = us_read_distance_mm();                  // Read ultrasonic distance in millimeters
+
+    motor_set_direction(true);                              // Forward
+    motor_set_speed_percent(30);                            // 30% speed
+    HAL_Delay(2000);
+
+    motor_set_speed_percent(60);                            // 60% speed
+    HAL_Delay(2000);
+
+    motor_set_speed_percent(100);                           // 100% speed
+    HAL_Delay(2000);
+
+    motor_set_speed_percent(0);                             // Stop
+    HAL_Delay(2000);
 
     servo_set_angle(0.0f);                              // Move servo to 0°
     HAL_Delay(2000);                                    // Wait 2 seconds
@@ -398,9 +447,9 @@ static void MX_TIM3_Init(void)
   /* USER CODE END TIM3_Init 1 */
 
   htim3.Instance = TIM3;                                // Select hardware timer 3
-  htim3.Init.Prescaler = 0;                             // No prescaler, timer runs at full timer clock
+  htim3.Init.Prescaler = 79;                             // No prescaler, timer runs at full timer clock
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;          // Count upward
-  htim3.Init.Period = 65535;                            // Maximum 16-bit period
+  htim3.Init.Period = 999;                            // Maximum 16-bit period
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;   // No extra division
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE; // No ARR preload
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -537,7 +586,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET); // Turn onboard LED off initially
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, MOTOR_L_DIR_Pin|MTOR_R_DIR_Pin|US_trig_Pin, GPIO_PIN_RESET); // Set motor dir and ultrasonic trig low initially
+  HAL_GPIO_WritePin(GPIOB, MOTOR_L_DIR_Pin|US_trig_Pin, GPIO_PIN_RESET); // Set motor dir and ultrasonic trig low initially
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;                         // User button pin
@@ -560,8 +609,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low speed is enough for LED
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);       // Apply config
 
-  /*Configure GPIO pins : MOTOR_L_DIR_Pin MTOR_R_DIR_Pin US_trig_Pin */
-  GPIO_InitStruct.Pin = MOTOR_L_DIR_Pin|MTOR_R_DIR_Pin|US_trig_Pin; // Motor direction and ultrasonic trigger pins
+  /*Configure GPIO pins : MOTOR_L_DIR_Pin US_trig_Pin */
+  GPIO_InitStruct.Pin = MOTOR_L_DIR_Pin|US_trig_Pin;    // Single motor direction pin and ultrasonic trigger pin
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;           // Push-pull outputs
   GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No pull resistor
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low speed is sufficient
