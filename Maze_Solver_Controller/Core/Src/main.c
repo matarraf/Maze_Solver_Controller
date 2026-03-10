@@ -93,27 +93,42 @@ void servo_set_angle(float angle)
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Motor driver on TIM3 CH1 (single PWM output)
-// This single PWM line controls the speed of both motors together through one driver.
-#define MOTOR_TIM   (&htim3)
-#define MOTOR_CH    TIM_CHANNEL_1
+// Dual motor driver using TIM3 CH1 + CH2 for PWM
+// Servo remains on TIM2 CH1, so motors must NOT use TIM2.
 
-// Set motor PWM duty cycle as a percentage: 0..100
-static void motor_set_speed_percent(uint8_t percent)
+#define MOTOR_TIM        (&htim3)
+#define MOTOR1_PWM_CH    TIM_CHANNEL_1
+#define MOTOR2_PWM_CH    TIM_CHANNEL_2
+
+// Motor control pins
+#define M1_PIN           GPIO_PIN_7
+#define M1_PORT          GPIOB
+
+#define M2_PIN           GPIO_PIN_4
+#define M2_PORT          GPIOB
+
+// Set one motor PWM from 0..255
+static void motor_set_raw(uint32_t channel, uint8_t value)
 {
-  if (percent > 100) percent = 100;                     // Clamp to valid range
+  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);
 
-  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);   // Read timer auto-reload value
-  uint32_t pulse = (arr * percent) / 100U;              // Convert percentage to compare value
-
-  __HAL_TIM_SET_COMPARE(MOTOR_TIM, MOTOR_CH, pulse);    // Update PWM duty cycle
+  // Map 0..255 to 0..ARR
+  uint32_t pulse = ((uint32_t)value * arr) / 255U;
+  __HAL_TIM_SET_COMPARE(MOTOR_TIM, channel, pulse);
 }
 
-// Set motor direction using one DIR pin
+// Set both motors to same PWM value
+static void motor_set_both(uint8_t value)
+{
+  motor_set_raw(MOTOR1_PWM_CH, value);
+  motor_set_raw(MOTOR2_PWM_CH, value);
+}
+
+// Set both motor direction/control pins
 static void motor_set_direction(bool forward)
 {
-  HAL_GPIO_WritePin(MOTOR_L_DIR_GPIO_Port, MOTOR_L_DIR_Pin,
-                    forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(M1_PORT, M1_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(M2_PORT, M2_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -282,14 +297,14 @@ int main(void)
   /* USER CODE BEGIN 2 */
   dwt_init();                                             // Enable microsecond timing using DWT cycle counter
 
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);               // Start PWM output on TIM2 Channel 1 for servo
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);               // Start PWM output on TIM3 Channel 1 for motor driver
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);               // Servo PWM
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);               // Motor 1 PWM
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);               // Motor 2 PWM
 
-  // Optional: start centered
-  servo_set_angle(90.0f);                                 // Move servo to center position at startup
+  servo_set_angle(90.0f);                                 // Servo center at startup
 
-  motor_set_direction(true);                              // Set default motor direction
-  motor_set_speed_percent(0);                             // Keep motors stopped at startup
+  motor_set_direction(true);                              // Forward direction
+  motor_set_both(0);                                      // Motors stopped at startup
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -303,16 +318,23 @@ int main(void)
     g_us_mm   = us_read_distance_mm();                  // Read ultrasonic distance in millimeters
 
     motor_set_direction(true);                              // Forward
-    motor_set_speed_percent(30);                            // 30% speed
+
+    motor_set_both(0);
+    HAL_Delay(1000);
+
+    motor_set_both(50);
     HAL_Delay(2000);
 
-    motor_set_speed_percent(60);                            // 60% speed
+    motor_set_both(100);
     HAL_Delay(2000);
 
-    motor_set_speed_percent(100);                           // 100% speed
+    motor_set_both(180);
     HAL_Delay(2000);
 
-    motor_set_speed_percent(0);                             // Stop
+    motor_set_both(255);
+    HAL_Delay(2000);
+
+    motor_set_both(0);
     HAL_Delay(2000);
 
     servo_set_angle(0.0f);                              // Move servo to 0°
@@ -436,46 +458,53 @@ static void MX_TIM2_Init(void)
 static void MX_TIM3_Init(void)
 {
   /* USER CODE BEGIN TIM3_Init 0 */
-  // Add custom pre-init code for TIM3 here if needed
   /* USER CODE END TIM3_Init 0 */
 
-  TIM_MasterConfigTypeDef sMasterConfig = {0};          // Timer master configuration
-  TIM_OC_InitTypeDef sConfigOC = {0};                   // PWM/output compare configuration
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
-  // Add custom config code here if needed
   /* USER CODE END TIM3_Init 1 */
 
-  htim3.Instance = TIM3;                                // Select hardware timer 3
-  htim3.Init.Prescaler = 79;                             // No prescaler, timer runs at full timer clock
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;          // Count upward
-  htim3.Init.Period = 999;                            // Maximum 16-bit period
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;   // No extra division
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE; // No ARR preload
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 79;                            // 1 us timer tick if timer clock is 80 MHz
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 255;                              // Matches 0..255 motor PWM control nicely
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if PWM init fails
+    Error_Handler();
   }
 
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;   // No trigger output
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE; // Standalone timer
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if sync config fails
+    Error_Handler();
   }
 
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;                   // PWM mode 1
-  sConfigOC.Pulse = 0;                                  // Initial duty cycle 0
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;           // Active HIGH output
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;            // Fast mode disabled
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
+  // TIM3 CH1
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if PWM channel config fails
+    Error_Handler();
+  }
+
+  // TIM3 CH2
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
   }
 
   /* USER CODE BEGIN TIM3_Init 2 */
-  // Add custom post-init code for TIM3 here if needed
   /* USER CODE END TIM3_Init 2 */
+
+  HAL_TIM_MspPostInit(&htim3);                          // Required for PWM output pins
 }
 
 /**
@@ -583,7 +612,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();                         // Enable clock for GPIO port B
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET); // Turn onboard LED off initially
+  HAL_GPIO_WritePin(GPIOB, US_trig_Pin|M1_PIN|M2_PIN, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, MOTOR_L_DIR_Pin|US_trig_Pin, GPIO_PIN_RESET); // Set motor dir and ultrasonic trig low initially
@@ -609,12 +638,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low speed is enough for LED
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);       // Apply config
 
-  /*Configure GPIO pins : MOTOR_L_DIR_Pin US_trig_Pin */
-  GPIO_InitStruct.Pin = MOTOR_L_DIR_Pin|US_trig_Pin;    // Single motor direction pin and ultrasonic trigger pin
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;           // Push-pull outputs
-  GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No pull resistor
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low speed is sufficient
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);               // Apply to GPIOB
+  /*Configure GPIO pins : US_trig_Pin M1_PIN M2_PIN */
+  GPIO_InitStruct.Pin = US_trig_Pin | M1_PIN | M2_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   // Add custom post-init GPIO code here if needed
