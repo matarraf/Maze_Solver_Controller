@@ -292,3 +292,48 @@ Command-line arguments:  -os win32 -ws win32 -arch x86_64
 
 !ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-03-10 13:58:41.061
 !MESSAGE Started RMI Server, listening on port 41337
+!SESSION 2026-03-27 14:27:23.854 -----------------------------------------------
+eclipse.buildId=Version 1.18.0
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_GB
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2026-03-27 14:27:45.044
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-03-27 14:27:45.046
+!MESSAGE Log4j2 initialized with config file C:\Users\c2018435\OneDrive - Newcastle University\Documents\Stage 4\EEE8113 - Group Design Project\Maze_Solver_Controller\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-03-27 14:27:50.957
+!MESSAGE Started RMI Server, listening on port 41337
+!SESSION 2026-03-29 13:11:31.202 -----------------------------------------------
+eclipse.buildId=Version 1.18.0
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_GB
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2026-03-29 13:12:12.941
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-03-29 13:12:12.942
+!MESSAGE Log4j2 initialized with config file C:\Users\c2018435\OneDrive - Newcastle University\Documents\Stage 4\EEE8113 - Group Design Project\Maze_Solver_Controller\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-03-29 13:12:18.867
+!MESSAGE Started RMI Server, listening on port 41337
+!SESSION 2026-03-30 10:59:56.328 -----------------------------------------------
+eclipse.buildId=Version 1.18.0
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=win32, ARCH=x86_64, WS=win32, NL=en_GB
+Command-line arguments:  -os win32 -ws win32 -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2026-03-30 11:02:44.669
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-03-30 11:02:44.670
+!MESSAGE Log4j2 initialized with config file C:\Users\c2018435\OneDrive - Newcastle University\Documents\Stage 4\EEE8113 - Group Design Project\Maze_Solver_Controller\.metadata\.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-03-30 11:02:50.162
+!MESSAGE Started RMI Server, listening on port 41337
