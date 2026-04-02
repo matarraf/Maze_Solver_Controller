@@ -27,25 +27,25 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   ALLOC
  11 .ARM.attributes 00000030  00000000  00000000  0000600c  2**0
                   CONTENTS, READONLY
- 12 .debug_info   0000f490  00000000  00000000  0000603c  2**0
+ 12 .debug_info   0000f48f  00000000  00000000  0000603c  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 13 .debug_abbrev 00001e34  00000000  00000000  000154cc  2**0
+ 13 .debug_abbrev 00001e1f  00000000  00000000  000154cb  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 14 .debug_aranges 00000ea8  00000000  00000000  00017300  2**3
+ 14 .debug_aranges 00000ea8  00000000  00000000  000172f0  2**3
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 15 .debug_rnglists 00000b86  00000000  00000000  000181a8  2**0
+ 15 .debug_rnglists 00000b86  00000000  00000000  00018198  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 16 .debug_macro  0002620b  00000000  00000000  00018d2e  2**0
+ 16 .debug_macro  0002620a  00000000  00000000  00018d1e  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_line   0001059f  00000000  00000000  0003ef39  2**0
+ 17 .debug_line   0001059d  00000000  00000000  0003ef28  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_str    000f0983  00000000  00000000  0004f4d8  2**0
+ 18 .debug_str    000f0983  00000000  00000000  0004f4c5  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 19 .comment      00000043  00000000  00000000  0013fe5b  2**0
+ 19 .comment      00000043  00000000  00000000  0013fe48  2**0
                   CONTENTS, READONLY
- 20 .debug_frame  00003e2c  00000000  00000000  0013fea0  2**2
+ 20 .debug_frame  00003e2c  00000000  00000000  0013fe8c  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 21 .debug_line_str 000000bf  00000000  00000000  00143ccc  2**0
+ 21 .debug_line_str 000000bf  00000000  00000000  00143cb8  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -370,9 +370,9 @@ Disassembly of section .text:
  80004f2:	bf00      	nop
 
 080004f4 <servo_set_pulse_us>:
+#define SERVO_CH    TIM_CHANNEL_1   // servo uses channel 1
 
-// Timer is configured for 1us ticks and 20ms period:
-// PSC=79, ARR=19999  -> CCR value equals pulse width in microseconds.
+// Timer is configured for 1us ticks and 20ms period: PSC=79, ARR=19999  -> CCR value equals pulse width in microseconds.
 // This helper writes a pulse width directly to the PWM compare register.
 static void servo_set_pulse_us(uint16_t pulse_us)
 {
@@ -409,8 +409,7 @@ static void servo_set_pulse_us(uint16_t pulse_us)
 
 08000534 <servo_set_angle>:
 
-// angle: 0..180  -> 1000..2000 us
-// Converts an angle into a pulse width that the servo understands.
+// angle: 0..180  -> 1000..2000 us Converts an angle into a pulse width that the servo understands.
 void servo_set_angle(float angle)
 {
  8000534:	b580      	push	{r7, lr}
@@ -611,7 +610,7 @@ static void motor_set_direction(bool forward)
  80006a0:	48000400 	.word	0x48000400
 
 080006a4 <dwt_init>:
-#define IR_BLACK_IS_LOW   1                             // Logic configuration for interpreting IR sensor outputs
+#define IR_BLACK_IS_LOW   1        // Logic configuration for interpreting IR sensor outputs
 
 // Enable DWT cycle counter for microsecond timing (works on Cortex-M4 like L476)
 // DWT = Data Watchpoint and Trace unit, used here as a high-resolution timer.
@@ -832,8 +831,8 @@ static uint8_t ir_read_mask(void)
 	...
 
 08000814 <us_trigger>:
+/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // HC-SR04: trigger pulse (10us HIGH)
 // Sends the ultrasonic sensor a short pulse to start a measurement.
 static void us_trigger(void)
@@ -1008,10 +1007,10 @@ static uint32_t us_read_distance_mm(void)
  800091c:	10624dd3 	.word	0x10624dd3
 
 08000920 <main>:
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+/* USER CODE END 0 */
+
+/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
 int main(void)
 {
  8000920:	b580      	push	{r7, lr}
@@ -1021,14 +1020,14 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();                                           // Reset peripherals and initialize HAL library
+  HAL_Init();
  8000924:	f000 fc5c 	bl	80011e0 <HAL_Init>
   /* USER CODE BEGIN Init */
   // Place custom init code here if needed
   /* USER CODE END Init */
 
   /* Configure the system clock */
-  SystemClock_Config();                                 // Set up CPU/system clocks
+  SystemClock_Config();
  8000928:	f000 f882 	bl	8000a30 <SystemClock_Config>
   /* USER CODE BEGIN SysInit */
   // Place system-level init code here if needed
@@ -1047,6 +1046,7 @@ int main(void)
  800093c:	f000 f988 	bl	8000c50 <MX_TIM4_Init>
 
   /* USER CODE BEGIN 2 */
+
   dwt_init();                                             // Enable microsecond timing using DWT cycle counter
  8000940:	f7ff feb0 	bl	80006a4 <dwt_init>
 
@@ -1075,9 +1075,9 @@ int main(void)
  800096c:	f7ff fe6e 	bl	800064c <motor_set_both>
   while (1)
   {
-    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
     g_ir_mask = ir_read_mask();                         // Read all 8 IR sensors and store as bitmask
  8000970:	f7ff ff2c 	bl	80007cc <ir_read_mask>
  8000974:	4603      	mov	r3, r0
@@ -1090,7 +1090,7 @@ int main(void)
  8000982:	4a28      	ldr	r2, [pc, #160]	@ (8000a24 <main+0x104>)
  8000984:	6013      	str	r3, [r2, #0]
 
-    motor_set_direction(true);                              // Forward
+    motor_set_direction(true);                          // Forward
  8000986:	2001      	movs	r0, #1
  8000988:	f7ff fe74 	bl	8000674 <motor_set_direction>
 
@@ -1168,10 +1168,10 @@ int main(void)
  8000a2c:	43340000 	.word	0x43340000
 
 08000a30 <SystemClock_Config>:
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+}
+
+/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
 void SystemClock_Config(void)
 {
  8000a30:	b580      	push	{r7, lr}
@@ -1205,9 +1205,7 @@ void SystemClock_Config(void)
  8000a60:	f000 fa00 	bl	8000e64 <Error_Handler>
   }
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+  /* Initializes the RCC Oscillators according to the specified parameters in the RCC_OscInitTypeDef structure. */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI; // Use internal high-speed oscillator
  8000a64:	2302      	movs	r3, #2
  8000a66:	617b      	str	r3, [r7, #20]
@@ -1250,22 +1248,21 @@ void SystemClock_Config(void)
  8000a9e:	f000 f9e1 	bl	8000e64 <Error_Handler>
   }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
+  /** Initializes the CPU, AHB and APB buses clocks */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
  8000aa2:	230f      	movs	r3, #15
  8000aa4:	603b      	str	r3, [r7, #0]
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2; // Configure all key clock domains
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK; // Use PLL as system clock source
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK; 			// Use PLL as system clock source
  8000aa6:	2303      	movs	r3, #3
  8000aa8:	607b      	str	r3, [r7, #4]
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;    // AHB bus = SYSCLK / 1
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;   				 	// AHB bus = SYSCLK / 1
  8000aaa:	2300      	movs	r3, #0
  8000aac:	60bb      	str	r3, [r7, #8]
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;     // APB1 bus = HCLK / 1
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;     				// APB1 bus = HCLK / 1
  8000aae:	2300      	movs	r3, #0
  8000ab0:	60fb      	str	r3, [r7, #12]
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;     // APB2 bus = HCLK / 1
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;     				// APB2 bus = HCLK / 1
  8000ab2:	2300      	movs	r3, #0
  8000ab4:	613b      	str	r3, [r7, #16]
 
@@ -1278,7 +1275,7 @@ void SystemClock_Config(void)
  8000ac2:	2b00      	cmp	r3, #0
  8000ac4:	d001      	beq.n	8000aca <SystemClock_Config+0x9a>
   {
-    Error_Handler();                                    // Stop if clock config fails
+    Error_Handler();	   // Stop if clock config fails
  8000ac6:	f000 f9cd 	bl	8000e64 <Error_Handler>
   }
 }
@@ -1289,10 +1286,7 @@ void SystemClock_Config(void)
 	...
 
 08000ad4 <MX_TIM2_Init>:
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
+
 static void MX_TIM2_Init(void)
 {
  8000ad4:	b580      	push	{r7, lr}
@@ -1418,10 +1412,7 @@ static void MX_TIM2_Init(void)
  8000b84:	20000028 	.word	0x20000028
 
 08000b88 <MX_TIM3_Init>:
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
+
 static void MX_TIM3_Init(void)
 {
  8000b88:	b580      	push	{r7, lr}
@@ -1562,10 +1553,7 @@ static void MX_TIM3_Init(void)
  8000c4c:	40000400 	.word	0x40000400
 
 08000c50 <MX_TIM4_Init>:
-  * @brief TIM4 Initialization Function
-  * @param None
-  * @retval None
-  */
+
 static void MX_TIM4_Init(void)
 {
  8000c50:	b580      	push	{r7, lr}
@@ -1685,10 +1673,7 @@ static void MX_TIM4_Init(void)
  8000cf4:	40000800 	.word	0x40000800
 
 08000cf8 <MX_USART2_UART_Init>:
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
+
 static void MX_USART2_UART_Init(void)
 {
  8000cf8:	b580      	push	{r7, lr}
@@ -1760,10 +1745,7 @@ static void MX_USART2_UART_Init(void)
  8000d54:	40004400 	.word	0x40004400
 
 08000d58 <MX_GPIO_Init>:
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
+
 static void MX_GPIO_Init(void)
 {
  8000d58:	b580      	push	{r7, lr}
@@ -1862,7 +1844,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = IR_in_1_Pin|IR_in_2_Pin|IR_in_3_Pin|IR_in_4_Pin
  8000dfe:	23ff      	movs	r3, #255	@ 0xff
  8000e00:	617b      	str	r3, [r7, #20]
-                          |IR_in_5_Pin|IR_in_6_Pin|IR_in_7_Pin|IR_in_8_Pin; // All IR sensor input pins
+                          |IR_in_5_Pin|IR_in_6_Pin|IR_in_7_Pin|IR_in_8_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;               // Configure as digital inputs
  8000e02:	2300      	movs	r3, #0
  8000e04:	61bb      	str	r3, [r7, #24]
@@ -1926,10 +1908,10 @@ static void MX_GPIO_Init(void)
  8000e60:	48000800 	.word	0x48000800
 
 08000e64 <Error_Handler>:
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+/* USER CODE BEGIN 4 */
+// Add extra user functions here if needed
+/* USER CODE END 4 */
+
 void Error_Handler(void)
 {
  8000e64:	b480      	push	{r7}
