@@ -1,16 +1,16 @@
-/* USER CODE BEGIN Header */                              // Start of user-editable header section
+/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file           : main.c                             // Source file name
-  * @brief          : Main program body                  // Short description of this file
+  * @file           : main.c
+  * @brief          : Main program body
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2026 STMicroelectronics.             // Copyright notice from ST
+  * Copyright (c) 2026 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.   // License details are in the project root
+  * in the root directory of this software component.
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
@@ -27,7 +27,7 @@
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;        // Handle for Timer 2 (servo PWM)
 TIM_HandleTypeDef htim3;        // Handle for Timer 3 (motor PWM)
-TIM_HandleTypeDef htim4;        // Handle for Timer 4 (ultra-sounds PWM)
+TIM_HandleTypeDef htim4;        // Handle for Timer 4 (ultra-sound PWM)
 
 UART_HandleTypeDef huart2;      // Handle for USART2 serial communication
 
@@ -231,92 +231,94 @@ volatile uint32_t g_us_mm   = 0;                        // Latest ultrasonic dis
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
+// ---------------- Bang-bang steering settings ----------------
+#define MOTOR_SPEED_50_PERCENT   128U
+#define SERVO_STRAIGHT_ANGLE     90.0f
+#define SERVO_LEFT_ANGLE         60.0f // swap these two if the steering is the wrong way round mr Moh
+#define SERVO_RIGHT_ANGLE        120.0f // swap with this one
+
+
+// Bang-bang steering using 2 IR sensors
+// Left sensor  = IR4
+// Right sensor = IR5
+static void steering_bang_bang(uint8_t ir_mask)
+{
+  bool left_on  = (ir_mask & (1u << 3)) != 0;   // IR4
+  bool right_on = (ir_mask & (1u << 4)) != 0;   // IR5
+
+  if (left_on && right_on)
+  {
+    servo_set_angle(SERVO_STRAIGHT_ANGLE);
+  }
+  else if (left_on && !right_on)
+  {
+    servo_set_angle(SERVO_LEFT_ANGLE);
+  }
+  else if (!left_on && right_on)
+  {
+    servo_set_angle(SERVO_RIGHT_ANGLE);
+  }
+  else
+  {
+    servo_set_angle(SERVO_STRAIGHT_ANGLE);
+  }
+}
+
+// Main control loop (called inside while(1))
+static void control_loop(void)
+{
+  g_ir_mask = ir_read_mask();
+  g_us_mm   = us_read_distance_mm();
+
+  motor_set_direction(true);
+  motor_set_both(MOTOR_SPEED_50_PERCENT);
+
+  steering_bang_bang(g_ir_mask);
+
+  HAL_Delay(10);
+}
+
+/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
-  // Place very early custom setup here if needed
   /* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  // Place custom init code here if needed
   /* USER CODE END Init */
 
-  /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  // Place system-level init code here if needed
   /* USER CODE END SysInit */
 
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();                                       // Initialize GPIO pins
-  MX_USART2_UART_Init();                                // Initialize UART2
-  MX_TIM2_Init();                                       // Initialize Timer 2 for servo PWM
-  MX_TIM3_Init();                                       // Initialize Timer 3
-  MX_TIM4_Init();                                       // Initialize Timer 4
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
+  MX_TIM4_Init();
 
   /* USER CODE BEGIN 2 */
+  dwt_init();
 
-  dwt_init();                                             // Enable microsecond timing using DWT cycle counter
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);               // Servo PWM
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);               // Motor 1 PWM
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);               // Motor 2 PWM
-
-  servo_set_angle(90.0f);                                 // Servo center at startup
-
-  motor_set_direction(true);                              // Forward direction
-  motor_set_both(0);                                      // Motors stopped at startup
-
+  servo_set_angle(SERVO_STRAIGHT_ANGLE);
+  motor_set_direction(true);
+  motor_set_both(0);
   /* USER CODE END 2 */
-
-  /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
   while (1)
   {
-
     /* USER CODE BEGIN 3 */
-
-    g_ir_mask = ir_read_mask();                         // Read all 8 IR sensors and store as bitmask
-    g_us_mm   = us_read_distance_mm();                  // Read ultrasonic distance in millimeters
-
-    motor_set_direction(true);                          // Forward
-
-    motor_set_both(0);
-    HAL_Delay(1000);
-
-    motor_set_both(50);
-    HAL_Delay(2000);
-
-    motor_set_both(100);
-    HAL_Delay(2000);
-
-    motor_set_both(180);
-    HAL_Delay(2000);
-
-    motor_set_both(255);
-    HAL_Delay(2000);
-
-    motor_set_both(0);
-    HAL_Delay(2000);
-
-    servo_set_angle(0.0f);                              // Move servo to 0°
-    HAL_Delay(2000);                                    // Wait 2 seconds
-
-    servo_set_angle(90.0f);                             // Move servo to 90°
-    HAL_Delay(2000);                                    // Wait 2 seconds
-
-    servo_set_angle(180.0f);                            // Move servo to 180°
-    HAL_Delay(2000);                                    // Wait 2 seconds
+    control_loop();
+    /* USER CODE END 3 */
   }
-
-  /* USER CODE END 3 */
 }
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
@@ -352,14 +354,14 @@ void SystemClock_Config(void)
   /** Initializes the CPU, AHB and APB buses clocks */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2; // Configure all key clock domains
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK; 			// Use PLL as system clock source
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;   				 	// AHB bus = SYSCLK / 1
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;     				// APB1 bus = HCLK / 1
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;     				// APB2 bus = HCLK / 1
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;             // Use PLL as system clock source
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;                    // AHB bus = SYSCLK / 1
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;                     // APB1 bus = HCLK / 1
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;                     // APB2 bus = HCLK / 1
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
-    Error_Handler();	   // Stop if clock config fails
+    Error_Handler();       // Stop if clock config fails
   }
 }
 
