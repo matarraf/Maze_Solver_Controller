@@ -21,250 +21,262 @@
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
-#include <stdint.h>          // Fixed-width integer types like uint8_t, uint16_t
-#include <stdbool.h>         // Boolean type support: true / false
+#include <stdint.h>
+#include <stdbool.h>
 
 /* Private variables ---------------------------------------------------------*/
-TIM_HandleTypeDef htim2;        // Handle for Timer 2 (servo PWM)
-TIM_HandleTypeDef htim3;        // Handle for Timer 3 (motor PWM)
-TIM_HandleTypeDef htim4;        // Handle for Timer 4 (ultra-sound PWM)
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim4;
 
-UART_HandleTypeDef huart2;      // Handle for USART2 serial communication
+UART_HandleTypeDef huart2;
 
 /* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);               // Configures MCU system clock
-static void MX_GPIO_Init(void);              // Initialises GPIO pins
-static void MX_USART2_UART_Init(void);       // Initialises UART2
-static void MX_TIM2_Init(void);              // Initialises Timer 2
-static void MX_TIM3_Init(void);              // Initialises Timer 3
-static void MX_TIM4_Init(void);              // Initialises Timer 4
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
 
-// Servo on TIM2 CH1 (PA0)
-#define SERVO_TIM   (&htim2)        // servo uses timer 2
-#define SERVO_CH    TIM_CHANNEL_1   // servo uses channel 1
+// ================= Servo =================
+#define SERVO_TIM   (&htim2)
+#define SERVO_CH    TIM_CHANNEL_1
 
-// Timer is configured for 1us ticks and 20ms period: PSC=79, ARR=19999  -> CCR value equals pulse width in microseconds.
-// This helper writes a pulse width directly to the PWM compare register.
 static void servo_set_pulse_us(uint16_t pulse_us)
 {
-  if (pulse_us < 1000) pulse_us = 1000;                 // Clamp minimum pulse to 1000 us (typical servo 0°)
-  if (pulse_us > 2000) pulse_us = 2000;                 // Clamp maximum pulse to 2000 us (typical servo 180°)
-  __HAL_TIM_SET_COMPARE(SERVO_TIM, SERVO_CH, pulse_us); // Update PWM duty by setting compare value
+  if (pulse_us < 1000U) pulse_us = 1000U;
+  if (pulse_us > 2000U) pulse_us = 2000U;
+  __HAL_TIM_SET_COMPARE(SERVO_TIM, SERVO_CH, pulse_us);
 }
 
-// angle: 0..180  -> 1000..2000 us Converts an angle into a pulse width that the servo understands.
-void servo_set_angle(float angle)
+static void servo_set_angle(float angle)
 {
-  if (angle < 0.0f) angle = 0.0f;                       // Prevent angles below 0°
-  if (angle > 180.0f) angle = 180.0f;                   // Prevent angles above 180°
+  if (angle < 0.0f)   angle = 0.0f;
+  if (angle > 180.0f) angle = 180.0f;
 
-  float pulse_us_f = 1000.0f + (angle / 180.0f) * 1000.0f; // Map 0..180° to 1000..2000 us
-  servo_set_pulse_us((uint16_t)(pulse_us_f + 0.5f));    // Round to nearest integer and send to servo
+  float pulse_us_f = 1000.0f + (angle / 180.0f) * 1000.0f;
+  servo_set_pulse_us((uint16_t)(pulse_us_f + 0.5f));
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-// Dual motor driver using TIM3 CH1 + CH2 for PWM
+// ================= Motor =================
 #define MOTOR_TIM        (&htim3)
 #define MOTOR1_PWM_CH    TIM_CHANNEL_1
 #define MOTOR2_PWM_CH    TIM_CHANNEL_2
 
-// Motor control pins
 #define M1_PIN           GPIO_PIN_7
 #define M1_PORT          GPIOB
 #define M2_PIN           GPIO_PIN_4
 #define M2_PORT          GPIOB
 
-// Set one motor PWM from 0..255
 static void motor_set_raw(uint32_t channel, uint8_t value)
 {
   uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);
-
-  // Map 0..255 to 0..ARR
   uint32_t pulse = ((uint32_t)value * arr) / 255U;
   __HAL_TIM_SET_COMPARE(MOTOR_TIM, channel, pulse);
 }
 
-// Set both motors to same PWM value
 static void motor_set_both(uint8_t value)
 {
   motor_set_raw(MOTOR1_PWM_CH, value);
   motor_set_raw(MOTOR2_PWM_CH, value);
 }
 
-// Set both motor direction/control pins
 static void motor_set_direction(bool forward)
 {
   HAL_GPIO_WritePin(M1_PORT, M1_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
   HAL_GPIO_WritePin(M2_PORT, M2_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+// ================= IR Sensors =================
+#define IR_BLACK_IS_LOW   1U
+#define IR_SENSOR_COUNT   8U
 
-// If your IR sensors output LOW when they see BLACK, set this to 1. If they output HIGH on black, set to 0.
-#define IR_BLACK_IS_LOW   1        // Logic configuration for interpreting IR sensor outputs
-
-// Enable DWT cycle counter for microsecond timing (works on Cortex-M4 like L476)
-// DWT = Data Watchpoint and Trace unit, used here as a high-resolution timer.
-static void dwt_init(void)
+static GPIO_TypeDef* const ir_ports[IR_SENSOR_COUNT] =
 {
-  // Enable trace
-  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;       // Turn on trace/debug block required for DWT
-  // Reset cycle counter
-  DWT->CYCCNT = 0;                                      // Clear the cycle counter
-  // Enable cycle counter
-  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;                  // Start counting CPU cycles
-}
+  IR_in_1_GPIO_Port,
+  IR_in_2_GPIO_Port,
+  IR_in_3_GPIO_Port,
+  IR_in_4_GPIO_Port,
+  IR_in_5_GPIO_Port,
+  IR_in_6_GPIO_Port,
+  IR_in_7_GPIO_Port,
+  IR_in_8_GPIO_Port
+};
 
-// Returns microseconds since boot using CPU cycle counter
-static inline uint32_t micros(void)
+static const uint16_t ir_pins[IR_SENSOR_COUNT] =
 {
-  // SystemCoreClock is updated by SystemClock_Config
-  return (uint32_t)(DWT->CYCCNT / (SystemCoreClock / 1000000U)); // Convert cycle count to microseconds
-}
+  IR_in_1_Pin,
+  IR_in_2_Pin,
+  IR_in_3_Pin,
+  IR_in_4_Pin,
+  IR_in_5_Pin,
+  IR_in_6_Pin,
+  IR_in_7_Pin,
+  IR_in_8_Pin
+};
 
-// Read one IR sensor (1..8). Returns true if it sees BLACK.
+// idx: 0..7
 static bool ir_read_black(uint8_t idx)
 {
-  GPIO_PinState s;                                      // Temporary variable to store digital pin state
-
-  switch (idx)                                          // Select the requested IR sensor by index
+  if (idx >= IR_SENSOR_COUNT)
   {
-    case 1: s = HAL_GPIO_ReadPin(IR_in_1_GPIO_Port, IR_in_1_Pin); break; // Read IR sensor 1
-    case 2: s = HAL_GPIO_ReadPin(IR_in_2_GPIO_Port, IR_in_2_Pin); break; // Read IR sensor 2
-    case 3: s = HAL_GPIO_ReadPin(IR_in_3_GPIO_Port, IR_in_3_Pin); break; // Read IR sensor 3
-    case 4: s = HAL_GPIO_ReadPin(IR_in_4_GPIO_Port, IR_in_4_Pin); break; // Read IR sensor 4
-    case 5: s = HAL_GPIO_ReadPin(IR_in_5_GPIO_Port, IR_in_5_Pin); break; // Read IR sensor 5
-    case 6: s = HAL_GPIO_ReadPin(IR_in_6_GPIO_Port, IR_in_6_Pin); break; // Read IR sensor 6
-    case 7: s = HAL_GPIO_ReadPin(IR_in_7_GPIO_Port, IR_in_7_Pin); break; // Read IR sensor 7
-    case 8: s = HAL_GPIO_ReadPin(IR_in_8_GPIO_Port, IR_in_8_Pin); break; // Read IR sensor 8
-    default: return false;                              // Invalid sensor index
+    return false;
   }
 
+  GPIO_PinState s = HAL_GPIO_ReadPin(ir_ports[idx], ir_pins[idx]);
+
 #if IR_BLACK_IS_LOW
-  return (s == GPIO_PIN_RESET);                         // If sensor goes LOW on black, interpret LOW as black
+  return (s == GPIO_PIN_RESET);
 #else
-  return (s == GPIO_PIN_SET);                           // Otherwise interpret HIGH as black
+  return (s == GPIO_PIN_SET);
 #endif
 }
 
-// Returns an 8-bit mask of IR sensors detecting BLACK.
 // bit0 = IR1 ... bit7 = IR8
 static uint8_t ir_read_mask(void)
 {
-  uint8_t m = 0;                                        // Start with all bits cleared
+  uint8_t mask = 0U;
 
-  for (uint8_t i = 1; i <= 8; i++)                      // Loop through all 8 sensors
+  for (uint8_t i = 0; i < IR_SENSOR_COUNT; i++)
   {
-    if (ir_read_black(i)) m |= (1u << (i - 1));         // Set bit if that sensor sees black
+    if (ir_read_black(i))
+    {
+      mask |= (1U << i);
+    }
   }
 
-  return m;                                             // Return combined bitmask
+  return mask;
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+// ================= DWT timing =================
+static void dwt_init(void)
+{
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
 
-// HC-SR04: trigger pulse (10us HIGH)
-// Sends the ultrasonic sensor a short pulse to start a measurement.
+static inline uint32_t micros(void)
+{
+  return (uint32_t)(DWT->CYCCNT / (SystemCoreClock / 1000000U));
+}
+
+// ================= Ultrasonic =================
 static void us_trigger(void)
 {
-  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_RESET); // Ensure trigger starts LOW
+  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_RESET);
 
-  // short settle
-  for (volatile int i = 0; i < 100; i++) { __NOP(); }   // Tiny delay to stabilize line before trigger
+  for (volatile int i = 0; i < 100; i++) { __NOP(); }
 
-  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_SET);   // Set trigger HIGH
-  uint32_t t0 = micros();                               // Record start time
-  while ((micros() - t0) < 10) { /* wait ~10us */ }     // Hold HIGH for about 10 microseconds
-  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_RESET); // Set trigger LOW to finish pulse
+  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_SET);
+  uint32_t t0 = micros();
+  while ((micros() - t0) < 10U) { }
+  HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_RESET);
 }
 
-// Measure echo pulse width in microseconds using GPIO polling.
-// Returns 0 on timeout.
 static uint32_t us_echo_pulse_us(uint32_t timeout_us)
 {
-  uint32_t start_wait = micros();                       // Time when waiting for echo begins
+  uint32_t start_wait = micros();
 
-  // Wait for rising edge
   while (HAL_GPIO_ReadPin(US_echo_GPIO_Port, US_echo_Pin) == GPIO_PIN_RESET)
   {
-    if ((micros() - start_wait) > timeout_us) return 0; // Timeout if no echo starts in time
+    if ((micros() - start_wait) > timeout_us) return 0U;
   }
 
-  uint32_t t_rise = micros();                           // Timestamp when echo signal goes HIGH
+  uint32_t t_rise = micros();
 
-  // Wait for falling edge
   while (HAL_GPIO_ReadPin(US_echo_GPIO_Port, US_echo_Pin) == GPIO_PIN_SET)
   {
-    if ((micros() - t_rise) > timeout_us) return 0;    // Timeout if echo pulse stays HIGH too long
+    if ((micros() - t_rise) > timeout_us) return 0U;
   }
 
-  uint32_t t_fall = micros();                           // Timestamp when echo signal goes LOW again
-  return (t_fall - t_rise);                             // Pulse width = travel time of sound wave
+  uint32_t t_fall = micros();
+  return (t_fall - t_rise);
 }
 
-// Returns distance in millimeters. Returns 0 on timeout/invalid.
 static uint32_t us_read_distance_mm(void)
 {
-  us_trigger();                                         // Send trigger pulse to ultrasonic sensor
+  us_trigger();
 
-  // Typical max range ~4m => echo up to ~23200us. Use 30000us timeout.
-  uint32_t pw = us_echo_pulse_us(30000);                // Measure echo pulse width in microseconds
-  if (pw == 0) return 0;                                // Return 0 if no valid echo was received
+  uint32_t pw = us_echo_pulse_us(30000U);
+  if (pw == 0U) return 0U;
 
-  // Speed of sound approx 343 m/s => 0.343 mm/us
-  // Distance = (pw_us * 0.343) / 2
-  // Use integer math: (pw * 343) / 2000 gives mm (since 0.343/2 = 0.1715)
-  return (pw * 343U) / 2000U;                           // Convert pulse width into one-way distance in mm
+  return (pw * 343U) / 2000U;
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+// ================= Globals =================
+volatile uint8_t  g_ir_mask = 0U;
+volatile uint32_t g_us_mm   = 0U;
 
-// Global sensor values (accessible from anywhere in main.c)
-volatile uint8_t  g_ir_mask = 0;                        // Latest 8-bit IR sensor reading
-volatile uint32_t g_us_mm   = 0;                        // Latest ultrasonic distance in mm
+// ================= Bang-bang steering =================
+#define MOTOR_SPEED_50_PERCENT      128U
 
-/* USER CODE END 0 */
+#define SERVO_STRAIGHT_ANGLE        90.0f
+#define SERVO_HARD_LEFT_ANGLE       50.0f
+#define SERVO_LEFT_ANGLE            65.0f
+#define SERVO_SOFT_LEFT_ANGLE       78.0f
+#define SERVO_SOFT_RIGHT_ANGLE      102.0f
+#define SERVO_RIGHT_ANGLE           115.0f
+#define SERVO_HARD_RIGHT_ANGLE      130.0f
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+// Using IR2..IR7 as the 6 steering sensors
+#define STEER_SENSOR_MASK  ((1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5) | (1U << 6))
 
-// ---------------- Bang-bang steering settings ----------------
-#define MOTOR_SPEED_50_PERCENT   128U
-#define SERVO_STRAIGHT_ANGLE     90.0f
-#define SERVO_LEFT_ANGLE         60.0f // swap these two if the steering is the wrong way round mr Moh
-#define SERVO_RIGHT_ANGLE        120.0f // swap with this one
+static float g_last_steer_angle = SERVO_STRAIGHT_ANGLE;
 
-
-// Bang-bang steering using 2 IR sensors
-// Left sensor  = IR4
-// Right sensor = IR5
-static void steering_bang_bang(uint8_t ir_mask)
+static void steering_bang_bang_6(uint8_t ir_mask)
 {
-  bool left_on  = (ir_mask & (1u << 3)) != 0;   // IR4
-  bool right_on = (ir_mask & (1u << 4)) != 0;   // IR5
+  uint8_t steer_mask = ir_mask & STEER_SENSOR_MASK;
 
-  if (left_on && right_on)
+  // No line seen -> keep previous steering command
+  if (steer_mask == 0U)
   {
-    servo_set_angle(SERVO_STRAIGHT_ANGLE);
+    servo_set_angle(g_last_steer_angle);
+    return;
   }
-  else if (left_on && !right_on)
+
+  // Average active sensor position across IR2..IR7
+  // IR2->0, IR3->1, IR4->2, IR5->3, IR6->4, IR7->5
+  uint32_t sum = 0U;
+  uint32_t count = 0U;
+
+  for (uint8_t sensor = 1U; sensor <= 6U; sensor++)
   {
-    servo_set_angle(SERVO_LEFT_ANGLE);
+    if (steer_mask & (1U << sensor))
+    {
+      sum += (sensor - 1U);
+      count++;
+    }
   }
-  else if (!left_on && right_on)
+
+  if (count == 0U)
   {
-    servo_set_angle(SERVO_RIGHT_ANGLE);
+    servo_set_angle(g_last_steer_angle);
+    return;
   }
-  else
+
+  uint32_t avg = sum / count;
+  float target_angle;
+
+  switch (avg)
   {
-    servo_set_angle(SERVO_STRAIGHT_ANGLE);
+    case 0:  target_angle = SERVO_HARD_LEFT_ANGLE;  break;   // IR2
+    case 1:  target_angle = SERVO_LEFT_ANGLE;       break;   // IR3
+    case 2:  target_angle = SERVO_SOFT_LEFT_ANGLE;  break;   // IR4
+    case 3:  target_angle = SERVO_SOFT_RIGHT_ANGLE; break;   // IR5
+    case 4:  target_angle = SERVO_RIGHT_ANGLE;      break;   // IR6
+    case 5:  target_angle = SERVO_HARD_RIGHT_ANGLE; break;   // IR7
+    default: target_angle = SERVO_STRAIGHT_ANGLE;   break;
   }
+
+  g_last_steer_angle = target_angle;
+  servo_set_angle(target_angle);
 }
 
-// Main control loop (called inside while(1))
+// ================= Main control loop =================
 static void control_loop(void)
 {
   g_ir_mask = ir_read_mask();
@@ -273,27 +285,15 @@ static void control_loop(void)
   motor_set_direction(true);
   motor_set_both(MOTOR_SPEED_50_PERCENT);
 
-  steering_bang_bang(g_ir_mask);
+  steering_bang_bang_6(g_ir_mask);
 
   HAL_Delay(10);
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-  /* USER CODE END 1 */
-
   HAL_Init();
-
-  /* USER CODE BEGIN Init */
-  /* USER CODE END Init */
-
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-  /* USER CODE END SysInit */
 
   MX_GPIO_Init();
   MX_USART2_UART_Init();
@@ -301,7 +301,6 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
 
-  /* USER CODE BEGIN 2 */
   dwt_init();
 
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
@@ -310,125 +309,104 @@ int main(void)
 
   servo_set_angle(SERVO_STRAIGHT_ANGLE);
   motor_set_direction(true);
-  motor_set_both(0);
-  /* USER CODE END 2 */
+  motor_set_both(0U);
 
   while (1)
   {
-    /* USER CODE BEGIN 3 */
     control_loop();
-    /* USER CODE END 3 */
   }
 }
 
-/*-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------------*/
 
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};           // Structure for oscillator settings
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};           // Structure for bus/system clock settings
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
   if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
   {
-    Error_Handler();                                    // Stop here if voltage scaling fails
+    Error_Handler();
   }
 
-  /* Initializes the RCC Oscillators according to the specified parameters in the RCC_OscInitTypeDef structure. */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI; // Use internal high-speed oscillator
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;              // Turn HSI on
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT; // Default HSI calibration
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;          // Enable PLL
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;  // Use HSI as PLL source
-  RCC_OscInitStruct.PLL.PLLM = 1;                       // PLL input divider
-  RCC_OscInitStruct.PLL.PLLN = 10;                      // PLL multiplication factor
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;           // PLL P output divider
-  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;           // PLL Q output divider
-  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;           // PLL R output divider (system clock path)
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 10;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if oscillator config fails
+    Error_Handler();
   }
 
-  /** Initializes the CPU, AHB and APB buses clocks */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2; // Configure all key clock domains
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;             // Use PLL as system clock source
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;                    // AHB bus = SYSCLK / 1
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;                     // APB1 bus = HCLK / 1
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;                     // APB2 bus = HCLK / 1
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
-    Error_Handler();       // Stop if clock config fails
+    Error_Handler();
   }
 }
 
 static void MX_TIM2_Init(void)
 {
-  /* USER CODE BEGIN TIM2_Init 0 */
-  // Add custom pre-init code for TIM2 here if needed
-  /* USER CODE END TIM2_Init 0 */
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  TIM_MasterConfigTypeDef sMasterConfig = {0};          // Timer master mode configuration
-  TIM_OC_InitTypeDef sConfigOC = {0};                   // Output compare (PWM) configuration
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 79;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 19999;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 
-  /* USER CODE BEGIN TIM2_Init 1 */
-  // Add custom TIM2 config code here if needed
-  /* USER CODE END TIM2_Init 1 */
-
-  htim2.Instance = TIM2;                                // Select hardware timer 2
-  htim2.Init.Prescaler = 79;                            // Divide timer clock so counter ticks every 1 us
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;          // Counter counts upward
-  htim2.Init.Period = 19999;                            // Timer overflows every 20000 us = 20 ms
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;   // No extra clock division
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE; // No ARR preload
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if PWM init fails
+    Error_Handler();
   }
 
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;   // No trigger output
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE; // No master/slave mode
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if master config fails
+    Error_Handler();
   }
 
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;                   // PWM mode 1
-  sConfigOC.Pulse = 0;                                  // Initial pulse width = 0
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;           // Active HIGH PWM output
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;            // Fast mode disabled
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if channel config fails
+    Error_Handler();
   }
 
-  /* USER CODE BEGIN TIM2_Init 2 */
-  // Add custom post-init code for TIM2 here if needed
-  /* USER CODE END TIM2_Init 2 */
-
-  HAL_TIM_MspPostInit(&htim2);                          // Configure GPIO pin associated with TIM2 PWM
+  HAL_TIM_MspPostInit(&htim2);
 }
 
 static void MX_TIM3_Init(void)
 {
-  /* USER CODE BEGIN TIM3_Init 0 */
-  /* USER CODE END TIM3_Init 0 */
-
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
-  /* USER CODE END TIM3_Init 1 */
-
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 79;                            // 1 us timer tick if timer clock is 80 MHz
+  htim3.Init.Prescaler = 79;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 255;                              // Matches 0..255 motor PWM control nicely
+  htim3.Init.Period = 255;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
@@ -446,139 +424,104 @@ static void MX_TIM3_Init(void)
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
 
-  // TIM3 CH1
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
 
-  // TIM3 CH2
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
 
-  /* USER CODE BEGIN TIM3_Init 2 */
-  /* USER CODE END TIM3_Init 2 */
-
-  HAL_TIM_MspPostInit(&htim3);                          // Required for PWM output pins
+  HAL_TIM_MspPostInit(&htim3);
 }
 
 static void MX_TIM4_Init(void)
 {
-  /* USER CODE BEGIN TIM4_Init 0 */
-  // Add custom pre-init code for TIM4 here if needed
-  /* USER CODE END TIM4_Init 0 */
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
 
-  TIM_MasterConfigTypeDef sMasterConfig = {0};          // Timer master configuration
-  TIM_IC_InitTypeDef sConfigIC = {0};                   // Input capture configuration
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 
-  /* USER CODE BEGIN TIM4_Init 1 */
-  // Add custom config code here if needed
-  /* USER CODE END TIM4_Init 1 */
-
-  htim4.Instance = TIM4;                                // Select hardware timer 4
-  htim4.Init.Prescaler = 0;                             // No prescaler
-  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;          // Count upward
-  htim4.Init.Period = 65535;                            // Max 16-bit period
-  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;   // No extra division
-  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE; // No ARR preload
   if (HAL_TIM_IC_Init(&htim4) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if input capture init fails
+    Error_Handler();
   }
 
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;   // No trigger output
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE; // Standalone timer
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if sync config fails
+    Error_Handler();
   }
 
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING; // Capture on rising edge
-  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;     // Use direct input
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;               // No prescaling on input capture
-  sConfigIC.ICFilter = 0;                               // No digital filter
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+
   if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if IC channel config fails
+    Error_Handler();
   }
-
-  /* USER CODE BEGIN TIM4_Init 2 */
-  // Add custom post-init code for TIM4 here if needed
-  /* USER CODE END TIM4_Init 2 */
 }
 
 static void MX_USART2_UART_Init(void)
 {
-  /* USER CODE BEGIN USART2_Init 0 */
-  // Add custom pre-init UART code here if needed
-  /* USER CODE END USART2_Init 0 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 
-  /* USER CODE BEGIN USART2_Init 1 */
-  // Add custom UART config code here if needed
-  /* USER CODE END USART2_Init 1 */
-
-  huart2.Instance = USART2;                             // Select USART2 peripheral
-  huart2.Init.BaudRate = 115200;                        // Set baud rate to 115200
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;         // 8 data bits
-  huart2.Init.StopBits = UART_STOPBITS_1;               // 1 stop bit
-  huart2.Init.Parity = UART_PARITY_NONE;                // No parity bit
-  huart2.Init.Mode = UART_MODE_TX_RX;                   // Enable transmit and receive
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;          // No hardware flow control
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;      // Standard oversampling
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE; // One-bit sampling disabled
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT; // No advanced UART features used
   if (HAL_UART_Init(&huart2) != HAL_OK)
   {
-    Error_Handler();                                    // Stop if UART init fails
+    Error_Handler();
   }
-
-  /* USER CODE BEGIN USART2_Init 2 */
-  // Add custom UART post-init code here if needed
-  /* USER CODE END USART2_Init 2 */
 }
 
 static void MX_GPIO_Init(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};               // GPIO configuration structure
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-  // Add custom pre-init GPIO code here if needed
-  /* USER CODE END MX_GPIO_Init_1 */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();                         // Enable clock for GPIO port C
-  __HAL_RCC_GPIOH_CLK_ENABLE();                         // Enable clock for GPIO port H
-  __HAL_RCC_GPIOA_CLK_ENABLE();                         // Enable clock for GPIO port A
-  __HAL_RCC_GPIOB_CLK_ENABLE();                         // Enable clock for GPIO port B
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, US_trig_Pin|M1_PIN|M2_PIN, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, MOTOR_L_DIR_Pin|US_trig_Pin, GPIO_PIN_RESET); // Set motor dir and ultrasonic trig low initially
+  // Initial output levels
+  HAL_GPIO_WritePin(GPIOB, US_trig_Pin | M1_PIN | M2_PIN, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;                         // User button pin
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;          // Interrupt on falling edge
-  GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No pull-up or pull-down
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);        // Apply config to button pin
+  GPIO_InitStruct.Pin = B1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : IR_in_1_Pin IR_in_2_Pin IR_in_3_Pin IR_in_4_Pin
-                           IR_in_5_Pin IR_in_6_Pin IR_in_7_Pin IR_in_8_Pin */
-  GPIO_InitStruct.Pin = IR_in_1_Pin|IR_in_2_Pin|IR_in_3_Pin|IR_in_4_Pin
-                          |IR_in_5_Pin|IR_in_6_Pin|IR_in_7_Pin|IR_in_8_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;               // Configure as digital inputs
-  GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No internal pull resistors
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);               // Apply to GPIOC
+  /*Configure GPIO pins : IR_in_1_Pin ... IR_in_8_Pin */
+  GPIO_InitStruct.Pin = IR_in_1_Pin | IR_in_2_Pin | IR_in_3_Pin | IR_in_4_Pin
+                      | IR_in_5_Pin | IR_in_6_Pin | IR_in_7_Pin | IR_in_8_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;                        // LED pin
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;           // Push-pull output
-  GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No pull resistor
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low speed is enough for LED
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);       // Apply config
+  GPIO_InitStruct.Pin = LD2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : US_trig_Pin M1_PIN M2_PIN */
   GPIO_InitStruct.Pin = US_trig_Pin | M1_PIN | M2_PIN;
@@ -586,41 +529,21 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-  // Add custom post-init GPIO code here if needed
-  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-// Add extra user functions here if needed
 /* USER CODE END 4 */
 
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();                                      // Disable all interrupts so execution stops safely
+  __disable_irq();
   while (1)
   {
-    // Stay here forever so the fault is obvious during debugging
   }
-  /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+#ifdef USE_FULL_ASSERT
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
 }
-#endif /* USE_FULL_ASSERT */
+#endif
