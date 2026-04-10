@@ -16,7 +16,6 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
@@ -24,75 +23,36 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Private define ------------------------------------------------------------*/
+#define SERVO_TIM   (&htim2)
+#define SERVO_CH    TIM_CHANNEL_1
+
+#define MOTOR_TIM        (&htim3)
+#define MOTOR_L_PWM_CH   TIM_CHANNEL_1
+#define MOTOR_R_PWM_CH   TIM_CHANNEL_2
+
+#define IR_BLACK_IS_LOW   1U
+#define IR_SENSOR_COUNT   8U
+
+#define MOTOR_SPEED_50_PERCENT      128U
+
+#define SERVO_STRAIGHT_ANGLE        90.0f
+#define SERVO_HARD_LEFT_ANGLE       50.0f
+#define SERVO_LEFT_ANGLE            65.0f
+#define SERVO_SOFT_LEFT_ANGLE       78.0f
+#define SERVO_SOFT_RIGHT_ANGLE      102.0f
+#define SERVO_RIGHT_ANGLE           115.0f
+#define SERVO_HARD_RIGHT_ANGLE      130.0f
+
+/* Using IR2..IR7 as the 6 steering sensors */
+#define STEER_SENSOR_MASK  ((1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5) | (1U << 6))
+
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 UART_HandleTypeDef huart2;
-
-/* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_USART2_UART_Init(void);
-static void MX_TIM2_Init(void);
-static void MX_TIM3_Init(void);
-static void MX_TIM4_Init(void);
-
-/* Private user code ---------------------------------------------------------*/
-
-// ================= Servo =================
-#define SERVO_TIM   (&htim2)
-#define SERVO_CH    TIM_CHANNEL_1
-
-static void servo_set_pulse_us(uint16_t pulse_us)
-{
-  if (pulse_us < 1000U) pulse_us = 1000U;
-  if (pulse_us > 2000U) pulse_us = 2000U;
-  __HAL_TIM_SET_COMPARE(SERVO_TIM, SERVO_CH, pulse_us);
-}
-
-static void servo_set_angle(float angle)
-{
-  if (angle < 0.0f)   angle = 0.0f;
-  if (angle > 180.0f) angle = 180.0f;
-
-  float pulse_us_f = 1000.0f + (angle / 180.0f) * 1000.0f;
-  servo_set_pulse_us((uint16_t)(pulse_us_f + 0.5f));
-}
-
-// ================= Motor =================
-#define MOTOR_TIM        (&htim3)
-#define MOTOR1_PWM_CH    TIM_CHANNEL_1
-#define MOTOR2_PWM_CH    TIM_CHANNEL_2
-
-#define M1_PIN           GPIO_PIN_7
-#define M1_PORT          GPIOB
-#define M2_PIN           GPIO_PIN_4
-#define M2_PORT          GPIOB
-
-static void motor_set_raw(uint32_t channel, uint8_t value)
-{
-  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);
-  uint32_t pulse = ((uint32_t)value * arr) / 255U;
-  __HAL_TIM_SET_COMPARE(MOTOR_TIM, channel, pulse);
-}
-
-static void motor_set_both(uint8_t value)
-{
-  motor_set_raw(MOTOR1_PWM_CH, value);
-  motor_set_raw(MOTOR2_PWM_CH, value);
-}
-
-static void motor_set_direction(bool forward)
-{
-  HAL_GPIO_WritePin(M1_PORT, M1_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(M2_PORT, M2_PIN, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-// ================= IR Sensors =================
-#define IR_BLACK_IS_LOW   1U
-#define IR_SENSOR_COUNT   8U
 
 static GPIO_TypeDef* const ir_ports[IR_SENSOR_COUNT] =
 {
@@ -118,7 +78,79 @@ static const uint16_t ir_pins[IR_SENSOR_COUNT] =
   IR_in_8_Pin
 };
 
-// idx: 0..7
+volatile uint8_t  g_ir_mask = 0U;
+volatile uint32_t g_us_mm   = 0U;
+
+static float g_last_steer_angle = SERVO_STRAIGHT_ANGLE;
+
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_TIM4_Init(void);
+
+static void servo_set_pulse_us(uint16_t pulse_us);
+static void servo_set_angle(float angle);
+
+static void motor_set_raw(uint32_t channel, uint8_t value);
+static void motor_set_both(uint8_t value);
+static void motor_set_direction(bool forward);
+
+static bool ir_read_black(uint8_t idx);
+static uint8_t ir_read_mask(void);
+
+static void dwt_init(void);
+static inline uint32_t micros(void);
+
+static void us_trigger(void);
+static uint32_t us_echo_pulse_us(uint32_t timeout_us);
+static uint32_t us_read_distance_mm(void);
+
+static void steering_bang_bang_6(uint8_t ir_mask);
+static void control_loop(void);
+
+/* Private user code ---------------------------------------------------------*/
+/* ================= Servo ================================================== */
+static void servo_set_pulse_us(uint16_t pulse_us)
+{
+  if (pulse_us < 1000U) pulse_us = 1000U;
+  if (pulse_us > 2000U) pulse_us = 2000U;
+  __HAL_TIM_SET_COMPARE(SERVO_TIM, SERVO_CH, pulse_us);
+}
+
+static void servo_set_angle(float angle)
+{
+  if (angle < 0.0f)   angle = 0.0f;
+  if (angle > 180.0f) angle = 180.0f;
+
+  float pulse_us_f = 1000.0f + (angle / 180.0f) * 1000.0f;
+  servo_set_pulse_us((uint16_t)(pulse_us_f + 0.5f));
+}
+
+/* ================= Motor ================================================== */
+static void motor_set_raw(uint32_t channel, uint8_t value)
+{
+  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(MOTOR_TIM);
+  uint32_t pulse = ((uint32_t)value * arr) / 255U;
+  __HAL_TIM_SET_COMPARE(MOTOR_TIM, channel, pulse);
+}
+
+static void motor_set_both(uint8_t value)
+{
+  motor_set_raw(MOTOR_L_PWM_CH, value);
+  motor_set_raw(MOTOR_R_PWM_CH, value);
+}
+
+static void motor_set_direction(bool forward)
+{
+  HAL_GPIO_WritePin(MOTOR_L_DIR_GPIO_Port, MOTOR_L_DIR_Pin, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MTOR_R_DIR_GPIO_Port, MTOR_R_DIR_Pin, forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* ================= IR Sensors ============================================= */
 static bool ir_read_black(uint8_t idx)
 {
   if (idx >= IR_SENSOR_COUNT)
@@ -135,7 +167,7 @@ static bool ir_read_black(uint8_t idx)
 #endif
 }
 
-// bit0 = IR1 ... bit7 = IR8
+/* bit0 = IR1 ... bit7 = IR8 */
 static uint8_t ir_read_mask(void)
 {
   uint8_t mask = 0U;
@@ -151,7 +183,7 @@ static uint8_t ir_read_mask(void)
   return mask;
 }
 
-// ================= DWT timing =================
+/* ================= DWT timing  ============================================ */
 static void dwt_init(void)
 {
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -164,7 +196,7 @@ static inline uint32_t micros(void)
   return (uint32_t)(DWT->CYCCNT / (SystemCoreClock / 1000000U));
 }
 
-// ================= Ultrasonic =================
+/* ================= Ultrasonic ============================================= */
 static void us_trigger(void)
 {
   HAL_GPIO_WritePin(US_trig_GPIO_Port, US_trig_Pin, GPIO_PIN_RESET);
@@ -207,39 +239,20 @@ static uint32_t us_read_distance_mm(void)
   return (pw * 343U) / 2000U;
 }
 
-// ================= Globals =================
-volatile uint8_t  g_ir_mask = 0U;
-volatile uint32_t g_us_mm   = 0U;
-
-// ================= Bang-bang steering =================
-#define MOTOR_SPEED_50_PERCENT      128U
-
-#define SERVO_STRAIGHT_ANGLE        90.0f
-#define SERVO_HARD_LEFT_ANGLE       50.0f
-#define SERVO_LEFT_ANGLE            65.0f
-#define SERVO_SOFT_LEFT_ANGLE       78.0f
-#define SERVO_SOFT_RIGHT_ANGLE      102.0f
-#define SERVO_RIGHT_ANGLE           115.0f
-#define SERVO_HARD_RIGHT_ANGLE      130.0f
-
-// Using IR2..IR7 as the 6 steering sensors
-#define STEER_SENSOR_MASK  ((1U << 1) | (1U << 2) | (1U << 3) | (1U << 4) | (1U << 5) | (1U << 6))
-
-static float g_last_steer_angle = SERVO_STRAIGHT_ANGLE;
-
+/* ================= Steering =============================================== */
 static void steering_bang_bang_6(uint8_t ir_mask)
 {
   uint8_t steer_mask = ir_mask & STEER_SENSOR_MASK;
 
-  // No line seen -> keep previous steering command
+  /* No line seen -> keep previous steering command */
   if (steer_mask == 0U)
   {
     servo_set_angle(g_last_steer_angle);
     return;
   }
 
-  // Average active sensor position across IR2..IR7
-  // IR2->0, IR3->1, IR4->2, IR5->3, IR6->4, IR7->5
+  /* Average active sensor position across IR2..IR7
+     IR2->0, IR3->1, IR4->2, IR5->3, IR6->4, IR7->5 */
   uint32_t sum = 0U;
   uint32_t count = 0U;
 
@@ -263,12 +276,12 @@ static void steering_bang_bang_6(uint8_t ir_mask)
 
   switch (avg)
   {
-    case 0:  target_angle = SERVO_HARD_LEFT_ANGLE;  break;   // IR2
-    case 1:  target_angle = SERVO_LEFT_ANGLE;       break;   // IR3
-    case 2:  target_angle = SERVO_SOFT_LEFT_ANGLE;  break;   // IR4
-    case 3:  target_angle = SERVO_SOFT_RIGHT_ANGLE; break;   // IR5
-    case 4:  target_angle = SERVO_RIGHT_ANGLE;      break;   // IR6
-    case 5:  target_angle = SERVO_HARD_RIGHT_ANGLE; break;   // IR7
+    case 0:  target_angle = SERVO_HARD_LEFT_ANGLE;  break;
+    case 1:  target_angle = SERVO_LEFT_ANGLE;       break;
+    case 2:  target_angle = SERVO_SOFT_LEFT_ANGLE;  break;
+    case 3:  target_angle = SERVO_SOFT_RIGHT_ANGLE; break;
+    case 4:  target_angle = SERVO_RIGHT_ANGLE;      break;
+    case 5:  target_angle = SERVO_HARD_RIGHT_ANGLE; break;
     default: target_angle = SERVO_STRAIGHT_ANGLE;   break;
   }
 
@@ -276,7 +289,7 @@ static void steering_bang_bang_6(uint8_t ir_mask)
   servo_set_angle(target_angle);
 }
 
-// ================= Main control loop =================
+/* ================= Main control loop ====================================== */
 static void control_loop(void)
 {
   g_ir_mask = ir_read_mask();
@@ -290,17 +303,24 @@ static void control_loop(void)
   HAL_Delay(10);
 }
 
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
-  HAL_Init();
+
+	HAL_Init();
+
+  // Configure the system clock
   SystemClock_Config();
 
+  // Initialize all configured peripherals
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
-
   dwt_init();
 
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
@@ -317,18 +337,25 @@ int main(void)
   }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  /** Configure the main internal regulator output voltage
+  */
   if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
   {
     Error_Handler();
   }
 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -339,14 +366,15 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
-
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
 
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
@@ -358,122 +386,181 @@ void SystemClock_Config(void)
   }
 }
 
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM2_Init(void)
 {
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 79;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 19999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
-
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = 1500;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN TIM2_Init 2 */
 
+  /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
+
 }
 
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM3_Init(void)
 {
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 79;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 255;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
   }
-
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN TIM3_Init 2 */
 
+  /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
+
 }
 
+/**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_TIM4_Init(void)
 {
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_IC_InitTypeDef sConfigIC = {0};
 
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim4.Init.Period = 65535;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
   if (HAL_TIM_IC_Init(&htim4) != HAL_OK)
   {
     Error_Handler();
   }
-
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-
   sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 0;
-
   if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+
 }
 
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_USART2_UART_Init(void)
 {
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
   huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
@@ -484,66 +571,104 @@ static void MX_USART2_UART_Init(void)
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
   huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-
   if (HAL_UART_Init(&huart2) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
 }
 
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
 
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  // Initial output levels
-  HAL_GPIO_WritePin(GPIOB, US_trig_Pin | M1_PIN | M2_PIN, GPIO_PIN_RESET);
+  /* Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : B1_Pin */
+  /* Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, MOTOR_L_DIR_Pin|MTOR_R_DIR_Pin|US_trig_Pin, GPIO_PIN_RESET);
+
+  /* Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : IR_in_1_Pin ... IR_in_8_Pin */
-  GPIO_InitStruct.Pin = IR_in_1_Pin | IR_in_2_Pin | IR_in_3_Pin | IR_in_4_Pin
-                      | IR_in_5_Pin | IR_in_6_Pin | IR_in_7_Pin | IR_in_8_Pin;
+  /* Configure GPIO pins : IR_in_1_Pin IR_in_2_Pin IR_in_3_Pin IR_in_4_Pin
+                           IR_in_5_Pin IR_in_6_Pin IR_in_7_Pin IR_in_8_Pin */
+  GPIO_InitStruct.Pin = IR_in_1_Pin|IR_in_2_Pin|IR_in_3_Pin|IR_in_4_Pin
+                      | IR_in_5_Pin|IR_in_6_Pin|IR_in_7_Pin|IR_in_8_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
+  /* Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : US_trig_Pin M1_PIN M2_PIN */
-  GPIO_InitStruct.Pin = US_trig_Pin | M1_PIN | M2_PIN;
+  /* Configure GPIO pins : MOTOR_L_DIR_Pin MTOR_R_DIR_Pin US_trig_Pin */
+  GPIO_InitStruct.Pin = MOTOR_L_DIR_Pin|MTOR_R_DIR_Pin|US_trig_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* Optional safeguard if ultrasonic echo is being used as plain GPIO input */
+  GPIO_InitStruct.Pin = US_echo_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(US_echo_GPIO_Port, &GPIO_InitStruct);
+  /* USER CODE END MX_GPIO_Init_2 */
 }
 
-/* USER CODE BEGIN 4 */
-/* USER CODE END 4 */
-
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
+  /* USER CODE BEGIN Error_Handler_Debug */
   __disable_irq();
   while (1)
   {
   }
+  /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef USE_FULL_ASSERT
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
 }
-#endif
+#endif /* USE_FULL_ASSERT */
