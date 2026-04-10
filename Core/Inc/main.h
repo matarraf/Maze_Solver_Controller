@@ -18,6 +18,7 @@
   */
 /* USER CODE END Header */
 
+/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __MAIN_H
 #define __MAIN_H
 
@@ -28,8 +29,34 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "stm32l4xx_hal.h"
 
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Exported types ------------------------------------------------------------*/
+/* USER CODE BEGIN ET */
+
+/* USER CODE END ET */
+
+/* Exported constants --------------------------------------------------------*/
+/* USER CODE BEGIN EC */
+
+/* USER CODE END EC */
+
+/* Exported macro ------------------------------------------------------------*/
+/* USER CODE BEGIN EM */
+
+/* USER CODE END EM */
+
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+
+/* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
+
+/* USER CODE BEGIN EFP */
+
+/* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
 #define B1_Pin GPIO_PIN_13
@@ -63,30 +90,37 @@ void Error_Handler(void);
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
 
-#define MOTOR_L_SPD_Pin GPIO_PIN_6
-#define MOTOR_L_SPD_GPIO_Port GPIOA
-#define MOTOR_R_SPD_Pin GPIO_PIN_7
-#define MOTOR_R_SPD_GPIO_Port GPIOA
+#define MTOR_L_SPD_Pin GPIO_PIN_6
+#define MTOR_L_SPD_GPIO_Port GPIOA
+#define MTOR_R_SPD_Pin GPIO_PIN_7
+#define MTOR_R_SPD_GPIO_Port GPIOA
 
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
-
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
 
 #define MOTOR_L_DIR_Pin GPIO_PIN_4
 #define MOTOR_L_DIR_GPIO_Port GPIOB
-#define MOTOR_R_DIR_Pin GPIO_PIN_5
-#define MOTOR_R_DIR_GPIO_Port GPIOB
+#define MTOR_R_DIR_Pin GPIO_PIN_5
+#define MTOR_R_DIR_GPIO_Port GPIOB
 
 #define US_echo_Pin GPIO_PIN_6
 #define US_echo_GPIO_Port GPIOB
 #define US_trig_Pin GPIO_PIN_7
 #define US_trig_GPIO_Port GPIOB
 
-#define IR_SENSOR_COUNT 8U
+/* USER CODE BEGIN Private defines */
+/* Optional aliases for cleaner naming in user code */
+#define MOTOR_R_DIR_Pin        MTOR_R_DIR_Pin
+#define MOTOR_R_DIR_GPIO_Port  MTOR_R_DIR_GPIO_Port
+#define MOTOR_L_SPD_Pin        MTOR_L_SPD_Pin
+#define MOTOR_L_SPD_GPIO_Port  MTOR_L_SPD_GPIO_Port
+#define MOTOR_R_SPD_Pin        MTOR_R_SPD_Pin
+#define MOTOR_R_SPD_GPIO_Port  MTOR_R_SPD_GPIO_Port
+/* USER CODE END Private defines */
 
 #ifdef __cplusplus
 }

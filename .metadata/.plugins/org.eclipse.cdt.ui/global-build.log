@@ -405,3 +405,10 @@ Finished building: default.size.stdout
  
 Finished building: Maze_Solver_Controller.list
  
+15:10:24 **** Incremental Build of configuration Debug for project Maze_Solver_Controller ****
+make -j20 all 
+arm-none-eabi-size  Maze_Solver_Controller.elf 
+   text	   data	    bss	    dec	    hex	filename
+  20616	     16	   1944	  22576	   5830	Maze_Solver_Controller.elf
+Finished building: default.size.stdout
+ 
